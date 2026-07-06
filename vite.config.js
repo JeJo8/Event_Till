@@ -8,7 +8,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // then base should be '/event-till/'
 // If deploying to a custom domain, use '/'
 export default defineConfig({
-  base: '/event-till/',
+  base: '/Event_Till/',
   plugins: [
     react(),
     tailwindcss(),
