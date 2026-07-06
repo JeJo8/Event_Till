@@ -9,9 +9,6 @@ import { VitePWA } from 'vite-plugin-pwa'
 // If deploying to a custom domain, use '/'
 export default defineConfig({
   base: '/Event_Till/',
-  build: {
-    outDir: 'docs'
-  },
   plugins: [
     react(),
     tailwindcss(),
