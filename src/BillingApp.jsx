@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Minus, Trash2, Receipt, TrendingUp, Settings, Edit2, Check, X, Delete, Download, ArrowLeftRight } from "lucide-react";
+import { Plus, Minus, Trash2, Receipt, TrendingUp, Settings, Edit2, Check, X, Delete, Download, ArrowLeftRight, Users, Ban, RotateCcw } from "lucide-react";
 
 const CURRENCY = "£";
 const MENU_KEY = "billing_menu_v1";
@@ -49,6 +49,7 @@ export default function BillingApp() {
   const [splitMode, setSplitMode] = useState(false);
   const [splitEntry, setSplitEntry] = useState(""); // the amount typed on the split pad
   const [splitFor, setSplitFor] = useState("cash"); // is the typed amount the cash or card part
+  const [showSplitBill, setShowSplitBill] = useState(false);
 
   // Persist as things change
   useEffect(() => { save(MENU_KEY, menu); }, [menu]);
@@ -141,10 +142,16 @@ export default function BillingApp() {
     setSplitFor("cash");
   };
 
-  const dayTotal = salesLog.reduce((sum, r) => sum + r.total, 0);
-  const cashTotal = salesLog.reduce((sum, r) => sum + (r.payment === "cash" ? r.total : r.payment === "split" ? (r.split?.cash || 0) : 0), 0);
-  const cardTotal = salesLog.reduce((sum, r) => sum + (r.payment === "card" ? r.total : r.payment === "split" ? (r.split?.card || 0) : 0), 0);
-  const discountsTotal = salesLog.reduce((sum, r) => sum + (r.discount?.amount || 0), 0);
+  const activeSales = salesLog.filter(r => !r.refunded);
+  const dayTotal = activeSales.reduce((sum, r) => sum + r.total, 0);
+  const cashTotal = activeSales.reduce((sum, r) => sum + (r.payment === "cash" ? r.total : r.payment === "split" ? (r.split?.cash || 0) : 0), 0);
+  const cardTotal = activeSales.reduce((sum, r) => sum + (r.payment === "card" ? r.total : r.payment === "split" ? (r.split?.card || 0) : 0), 0);
+  const discountsTotal = activeSales.reduce((sum, r) => sum + (r.discount?.amount || 0), 0);
+  const refundsTotal = salesLog.filter(r => r.refunded).reduce((sum, r) => sum + r.total, 0);
+
+  // Live per-item sold counts (excludes refunded orders)
+  const soldCounts = {};
+  activeSales.forEach(r => r.items.forEach(i => { soldCounts[i.name] = (soldCounts[i.name] || 0) + i.qty; }));
 
   const switchPayment = (id) => {
     setSalesLog(prev => prev.map(r => {
@@ -152,6 +159,26 @@ export default function BillingApp() {
       const next = r.payment === "cash" ? "card" : "cash";
       return { ...r, payment: next, cashGiven: null, change: null };
     }));
+  };
+
+  const voidOrder = (id) => {
+    if (confirm("Delete this order completely? This cannot be undone.")) {
+      setSalesLog(prev => prev.filter(r => r.id !== id));
+    }
+  };
+
+  const toggleRefund = (id) => {
+    const rec = salesLog.find(r => r.id === id);
+    if (!rec) return;
+    if (!rec.refunded && !confirm("Mark this order as refunded? It will be removed from your totals.")) return;
+    setSalesLog(prev => prev.map(r => r.id === id ? { ...r, refunded: !r.refunded } : r));
+  };
+
+  const toggleSoldOut = (name) => {
+    setMenu(prev => prev.map(c => ({
+      ...c,
+      items: c.items.map(it => it.name === name ? { ...it, soldOut: !it.soldOut } : it),
+    })));
   };
 
   const resetDay = () => {
@@ -208,7 +235,10 @@ export default function BillingApp() {
             cashTotal={cashTotal}
             cardTotal={cardTotal}
             discountsTotal={discountsTotal}
+            refundsTotal={refundsTotal}
             onSwitchPayment={switchPayment}
+            onVoid={voidOrder}
+            onRefund={toggleRefund}
             onBack={() => setView("till")}
             onReset={resetDay}
           />
@@ -246,14 +276,32 @@ export default function BillingApp() {
               ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {currentMenuItems.map(item => (
-                    <button
-                      key={item.name}
-                      onClick={() => addItem(item, activeCategory)}
-                      className="p-4 bg-slate-50 hover:bg-slate-100 active:bg-slate-200 rounded-lg text-left transition min-h-20"
-                    >
-                      <div className="font-semibold text-slate-800 text-base leading-tight mb-1">{item.name}</div>
-                      <div className="text-slate-600 text-sm font-medium">{CURRENCY}{item.price.toFixed(2)}</div>
-                    </button>
+                    <div key={item.name} className="relative">
+                      <button
+                        onClick={() => addItem(item, activeCategory)}
+                        disabled={item.soldOut}
+                        className={`w-full p-4 rounded-lg text-left transition min-h-20 ${
+                          item.soldOut
+                            ? "bg-slate-100 opacity-60 cursor-not-allowed"
+                            : "bg-slate-50 hover:bg-slate-100 active:bg-slate-200"
+                        }`}
+                      >
+                        <div className="font-semibold text-slate-800 text-base leading-tight mb-1 pr-6">{item.name}</div>
+                        <div className="text-slate-600 text-sm font-medium">{CURRENCY}{item.price.toFixed(2)}</div>
+                        <div className={`text-xs mt-1 ${item.soldOut ? "text-red-500 font-semibold" : "text-slate-400"}`}>
+                          {item.soldOut ? "Sold out" : `${soldCounts[item.name] || 0} sold`}
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => toggleSoldOut(item.name)}
+                        title={item.soldOut ? "Mark available" : "Mark sold out"}
+                        className={`absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-full ${
+                          item.soldOut ? "bg-red-100 text-red-600" : "bg-white/70 text-slate-300 hover:text-slate-500"
+                        }`}
+                      >
+                        <Ban size={13} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -267,7 +315,12 @@ export default function BillingApp() {
                   Order
                 </h2>
                 {order.length > 0 && (
-                  <button onClick={clearOrder} className="text-sm text-red-600 font-semibold px-3 py-1 rounded hover:bg-red-50">Clear</button>
+                  <div className="flex gap-1">
+                    <button onClick={() => setShowSplitBill(true)} className="text-sm text-slate-700 font-semibold px-3 py-1 rounded hover:bg-slate-100 flex items-center gap-1">
+                      <Users size={14} /> Split bill
+                    </button>
+                    <button onClick={clearOrder} className="text-sm text-red-600 font-semibold px-3 py-1 rounded hover:bg-red-50">Clear</button>
+                  </div>
                 )}
               </div>
 
@@ -509,6 +562,157 @@ export default function BillingApp() {
             </div>
           </div>
         )}
+
+        {showSplitBill && (
+          <SplitBillModal
+            order={order}
+            total={total}
+            subtotal={subtotal}
+            discountAmount={discountAmount}
+            onClose={() => setShowSplitBill(false)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- SPLIT BILL HELPER (display only; does not record) ---
+function SplitBillModal({ order, total, subtotal, discountAmount, onClose }) {
+  const [mode, setMode] = useState("even"); // even | item
+  const [people, setPeople] = useState(2);
+  const [assign, setAssign] = useState({}); // unitId -> person index
+
+  // Expand order into individual units (one per quantity)
+  const units = [];
+  order.forEach(o => {
+    for (let i = 0; i < o.qty; i++) units.push({ id: `${o.name}#${i}`, name: o.name, price: o.price });
+  });
+
+  const changePeople = (delta) => setPeople(p => Math.max(1, Math.min(12, p + delta)));
+
+  // Even split with penny-accurate remainder handling
+  const totalCents = Math.round(total * 100);
+  const base = Math.floor(totalCents / people);
+  const extra = totalCents - base * people; // this many people pay one penny more
+  const evenLines = Array.from({ length: people }, (_, i) => (i < extra ? base + 1 : base) / 100);
+
+  // By-item per-person totals
+  const personTotals = Array.from({ length: people }, () => 0);
+  let unassigned = 0;
+  units.forEach(u => {
+    const p = assign[u.id];
+    if (p != null && p < people) personTotals[p] += u.price;
+    else unassigned += u.price;
+  });
+  const cycleAssign = (id) => setAssign(a => {
+    const cur = a[id];
+    const next = cur == null ? 0 : cur + 1 >= people ? null : cur + 1;
+    return { ...a, [id]: next };
+  });
+
+  const personColors = ["bg-blue-100 text-blue-800", "bg-purple-100 text-purple-800", "bg-green-100 text-green-800", "bg-amber-100 text-amber-800", "bg-pink-100 text-pink-800", "bg-teal-100 text-teal-800"];
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl p-5 max-w-md w-full max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="text-lg font-bold text-slate-800">Split the bill</h2>
+          <div className="text-right">
+            <div className="text-xs text-slate-500 font-semibold">Total</div>
+            <div className="text-xl font-bold text-slate-900">{CURRENCY}{total.toFixed(2)}</div>
+          </div>
+        </div>
+
+        {/* Mode toggle */}
+        <div className="flex bg-slate-100 rounded-lg p-0.5 mb-4">
+          {[["even", "Evenly"], ["item", "By item"]].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setMode(key)}
+              className={`flex-1 px-4 py-1.5 rounded-md text-sm font-semibold ${mode === key ? "bg-white shadow text-slate-800" : "text-slate-500"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* People stepper */}
+        <div className="flex items-center justify-between bg-slate-50 rounded-lg p-2 mb-4">
+          <span className="text-sm font-semibold text-slate-600 pl-2">Number of people</span>
+          <div className="flex items-center gap-3">
+            <button onClick={() => changePeople(-1)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-300 rounded-lg"><Minus size={16} /></button>
+            <span className="w-6 text-center text-lg font-bold">{people}</span>
+            <button onClick={() => changePeople(1)} className="w-9 h-9 flex items-center justify-center bg-white border border-slate-300 rounded-lg"><Plus size={16} /></button>
+          </div>
+        </div>
+
+        {mode === "even" ? (
+          <div>
+            {extra === 0 ? (
+              <div className="text-center py-4">
+                <div className="text-sm text-slate-500 font-semibold mb-1">Each person pays</div>
+                <div className="text-4xl font-bold text-slate-900">{CURRENCY}{evenLines[0].toFixed(2)}</div>
+                <div className="text-sm text-slate-500 mt-1">{people} × {CURRENCY}{evenLines[0].toFixed(2)}</div>
+              </div>
+            ) : (
+              <div className="py-2">
+                <div className="text-sm text-slate-500 font-semibold mb-2 text-center">Doesn't divide evenly — nearest penny:</div>
+                <div className="space-y-1">
+                  {evenLines.map((amt, i) => (
+                    <div key={i} className="flex justify-between px-3 py-2 bg-slate-50 rounded-lg text-sm">
+                      <span className="font-semibold">Person {i + 1}</span>
+                      <span className="font-bold">{CURRENCY}{amt.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <div className="text-xs text-slate-500 mb-2">Tap an item to assign it to the next person.</div>
+            <div className="space-y-1 mb-3">
+              {units.map(u => {
+                const p = assign[u.id];
+                return (
+                  <button
+                    key={u.id}
+                    onClick={() => cycleAssign(u.id)}
+                    className="w-full flex justify-between items-center px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                  >
+                    <span className="font-medium text-slate-800">{u.name}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-slate-500">{CURRENCY}{u.price.toFixed(2)}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${p != null && p < people ? personColors[p % personColors.length] : "bg-slate-100 text-slate-400"}`}>
+                        {p != null && p < people ? `P${p + 1}` : "—"}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="border-t border-slate-200 pt-2 space-y-1">
+              {personTotals.map((amt, i) => (
+                <div key={i} className="flex justify-between px-3 py-1.5 text-sm">
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${personColors[i % personColors.length]}`}>Person {i + 1}</span>
+                  <span className="font-bold">{CURRENCY}{amt.toFixed(2)}</span>
+                </div>
+              ))}
+              {unassigned > 0.001 && (
+                <div className="flex justify-between px-3 py-1.5 text-sm text-slate-400">
+                  <span className="font-semibold">Unassigned</span>
+                  <span className="font-bold">{CURRENCY}{unassigned.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+            {discountAmount > 0 && (
+              <div className="text-xs text-amber-600 mt-2">Note: item amounts are before the {CURRENCY}{discountAmount.toFixed(2)} discount.</div>
+            )}
+          </div>
+        )}
+
+        <button onClick={onClose} className="mt-5 w-full py-3 bg-slate-800 text-white font-bold rounded-xl">Done</button>
       </div>
     </div>
   );
@@ -688,7 +892,7 @@ function CategoryEditor({ cat, onRemove, onRename, onAddItem, onUpdateItem, onRe
 }
 
 // --- SUMMARY VIEW ---
-function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discountsTotal, onSwitchPayment, onBack, onReset }) {
+function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discountsTotal, refundsTotal, onSwitchPayment, onVoid, onRefund, onBack, onReset }) {
   const [breakdown, setBreakdown] = useState("product"); // product | category | orders
 
   // Map item name -> category from the current menu (fallback for older sales)
@@ -700,6 +904,7 @@ function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discounts
   const productMap = {};
   const categoryMap = {};
   salesLog.forEach(r => {
+    if (r.refunded) return;
     r.items.forEach(i => {
       const revenue = i.price * i.qty;
       const cat = categoryOf(i);
@@ -843,6 +1048,12 @@ function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discounts
           <div className="text-xs text-amber-700 font-semibold">Discounts</div>
           <div className="text-xl font-bold text-amber-900">{CURRENCY}{discountsTotal.toFixed(2)}</div>
         </div>
+        {refundsTotal > 0 && (
+          <div className="bg-red-50 p-3 rounded-lg">
+            <div className="text-xs text-red-700 font-semibold">Refunded</div>
+            <div className="text-xl font-bold text-red-900">{CURRENCY}{refundsTotal.toFixed(2)}</div>
+          </div>
+        )}
       </div>
 
       {/* Breakdown toggle */}
@@ -900,11 +1111,13 @@ function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discounts
           <div className="text-center text-slate-400 py-8">No sales yet</div>
         ) : (
           salesLog.map(r => (
-            <div key={r.id} className="py-2 border-b border-slate-100 text-sm">
+            <div key={r.id} className={`py-2 border-b border-slate-100 text-sm ${r.refunded ? "opacity-60" : ""}`}>
               <div className="flex justify-between items-center font-semibold">
                 <span className="flex items-center gap-2">
                   <span>{r.time}</span>
-                  {r.payment === "split" ? (
+                  {r.refunded ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">refunded</span>
+                  ) : r.payment === "split" ? (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
                       split
                     </span>
@@ -919,7 +1132,7 @@ function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discounts
                     </button>
                   )}
                 </span>
-                <span>{CURRENCY}{r.total.toFixed(2)}</span>
+                <span className={r.refunded ? "line-through text-slate-400" : ""}>{CURRENCY}{r.total.toFixed(2)}</span>
               </div>
               {r.payment === "split" && r.split && (
                 <div className="text-xs text-slate-500">
@@ -934,6 +1147,20 @@ function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discounts
                   Discount{r.discount.mode === "percent" ? ` (${r.discount.value}%)` : ""}: -{CURRENCY}{r.discount.amount.toFixed(2)}
                 </div>
               )}
+              <div className="flex gap-3 mt-1">
+                <button
+                  onClick={() => onRefund(r.id)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-red-600"
+                >
+                  <RotateCcw size={12} /> {r.refunded ? "Undo refund" : "Refund"}
+                </button>
+                <button
+                  onClick={() => onVoid(r.id)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-red-600"
+                >
+                  <Trash2 size={12} /> Delete
+                </button>
+              </div>
             </div>
           ))
         )}
