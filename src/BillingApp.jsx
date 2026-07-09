@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
-import { Plus, Minus, Trash2, Receipt, TrendingUp, Settings, Edit2, Check, X, Delete } from "lucide-react";
+import { Plus, Minus, Trash2, Receipt, TrendingUp, Settings, Edit2, Check, X, Delete, Download } from "lucide-react";
 
 const CURRENCY = "£";
 const MENU_KEY = "billing_menu_v1";
 const SALES_KEY = "billing_sales_v1";
 const ORDER_KEY = "billing_current_order_v1";
 const CASH_KEY = "billing_current_cash_v1";
+const DISCOUNT_KEY = "billing_current_discount_v1";
+const DEFAULT_DISCOUNT = { mode: "amount", value: "" };
 
 const DEFAULT_MENU = [
   { category: "Mains", items: [
@@ -36,6 +38,7 @@ export default function BillingApp() {
   const [menu, setMenu] = useState(() => load(MENU_KEY, DEFAULT_MENU));
   const [order, setOrder] = useState(() => load(ORDER_KEY, []));
   const [cashGiven, setCashGiven] = useState(() => load(CASH_KEY, ""));
+  const [discount, setDiscount] = useState(() => load(DISCOUNT_KEY, DEFAULT_DISCOUNT));
   const [salesLog, setSalesLog] = useState(() => load(SALES_KEY, []));
   const [activeCategory, setActiveCategory] = useState(() => {
     const m = load(MENU_KEY, DEFAULT_MENU);
@@ -47,21 +50,22 @@ export default function BillingApp() {
   useEffect(() => { save(MENU_KEY, menu); }, [menu]);
   useEffect(() => { save(ORDER_KEY, order); }, [order]);
   useEffect(() => { save(CASH_KEY, cashGiven); }, [cashGiven]);
+  useEffect(() => { save(DISCOUNT_KEY, discount); }, [discount]);
   useEffect(() => { save(SALES_KEY, salesLog); }, [salesLog]);
 
   // Order actions
-  const addItem = (item) => {
+  const addItem = (item, category) => {
     setOrder(prev => {
       const existing = prev.find(o => o.name === item.name);
       if (existing) return prev.map(o => o.name === item.name ? { ...o, qty: o.qty + 1 } : o);
-      return [...prev, { ...item, qty: 1 }];
+      return [...prev, { ...item, category, qty: 1 }];
     });
   };
   const changeQty = (name, delta) => {
     setOrder(prev => prev.map(o => o.name === name ? { ...o, qty: o.qty + delta } : o).filter(o => o.qty > 0));
   };
   const removeItem = (name) => setOrder(prev => prev.filter(o => o.name !== name));
-  const clearOrder = () => { setOrder([]); setCashGiven(""); };
+  const clearOrder = () => { setOrder([]); setCashGiven(""); setDiscount(DEFAULT_DISCOUNT); };
 
   // Number pad
   const pressKey = (key) => {
@@ -82,7 +86,11 @@ export default function BillingApp() {
     });
   };
 
-  const total = order.reduce((sum, o) => sum + o.price * o.qty, 0);
+  const subtotal = order.reduce((sum, o) => sum + o.price * o.qty, 0);
+  const discountValueNum = parseFloat(discount.value) || 0;
+  const rawDiscountAmount = discount.mode === "percent" ? (subtotal * discountValueNum) / 100 : discountValueNum;
+  const discountAmount = Math.min(Math.max(rawDiscountAmount, 0), subtotal);
+  const total = subtotal - discountAmount;
   const cash = parseFloat(cashGiven) || 0;
   const change = cash - total;
   const canComplete = order.length > 0;
@@ -92,6 +100,8 @@ export default function BillingApp() {
       id: Date.now(),
       time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
       items: order,
+      subtotal,
+      discount: discountAmount > 0 ? { mode: discount.mode, value: discountValueNum, amount: discountAmount } : null,
       total,
       payment: paymentType,
       cashGiven: paymentType === "cash" ? cash : null,
@@ -104,6 +114,7 @@ export default function BillingApp() {
   const dayTotal = salesLog.reduce((sum, r) => sum + r.total, 0);
   const cashTotal = salesLog.filter(r => r.payment === "cash").reduce((sum, r) => sum + r.total, 0);
   const cardTotal = salesLog.filter(r => r.payment === "card").reduce((sum, r) => sum + r.total, 0);
+  const discountsTotal = salesLog.reduce((sum, r) => sum + (r.discount?.amount || 0), 0);
 
   const resetDay = () => {
     if (confirm("Clear ALL sales for the day? Cannot be undone.")) {
@@ -154,9 +165,11 @@ export default function BillingApp() {
         {view === "summary" && (
           <SummaryView
             salesLog={salesLog}
+            menu={menu}
             dayTotal={dayTotal}
             cashTotal={cashTotal}
             cardTotal={cardTotal}
+            discountsTotal={discountsTotal}
             onBack={() => setView("till")}
             onReset={resetDay}
           />
@@ -196,7 +209,7 @@ export default function BillingApp() {
                   {currentMenuItems.map(item => (
                     <button
                       key={item.name}
-                      onClick={() => addItem(item)}
+                      onClick={() => addItem(item, activeCategory)}
                       className="p-4 bg-slate-50 hover:bg-slate-100 active:bg-slate-200 rounded-lg text-left transition min-h-20"
                     >
                       <div className="font-semibold text-slate-800 text-base leading-tight mb-1">{item.name}</div>
@@ -241,8 +254,59 @@ export default function BillingApp() {
                 )}
               </div>
 
+              {/* Discount */}
+              {order.length > 0 && (
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="flex bg-slate-100 rounded-lg p-0.5">
+                    <button
+                      onClick={() => setDiscount(d => ({ ...d, mode: "amount" }))}
+                      className={`px-3 py-1.5 rounded-md text-sm font-semibold ${discount.mode === "amount" ? "bg-white shadow text-slate-800" : "text-slate-500"}`}
+                    >
+                      {CURRENCY}
+                    </button>
+                    <button
+                      onClick={() => setDiscount(d => ({ ...d, mode: "percent" }))}
+                      className={`px-3 py-1.5 rounded-md text-sm font-semibold ${discount.mode === "percent" ? "bg-white shadow text-slate-800" : "text-slate-500"}`}
+                    >
+                      %
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    placeholder="Discount"
+                    value={discount.value}
+                    onChange={e => setDiscount(d => ({ ...d, value: e.target.value }))}
+                    className="flex-1 min-w-0 px-3 py-1.5 border border-slate-300 rounded-lg text-sm"
+                  />
+                  {discountValueNum > 0 && (
+                    <button
+                      onClick={() => setDiscount(d => ({ ...d, value: "" }))}
+                      className="text-slate-400 shrink-0"
+                      aria-label="Clear discount"
+                    >
+                      <X size={18} />
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Totals */}
               <div className="bg-slate-800 text-white rounded-lg p-3 mb-2">
+                {discountAmount > 0 && (
+                  <>
+                    <div className="flex justify-between items-center text-sm text-slate-300">
+                      <span>Subtotal</span>
+                      <span>{CURRENCY}{subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm text-amber-400 mb-1">
+                      <span>Discount{discount.mode === "percent" ? ` (${discountValueNum}%)` : ""}</span>
+                      <span>-{CURRENCY}{discountAmount.toFixed(2)}</span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-sm">Total</span>
                   <span className="text-2xl font-bold">{CURRENCY}{total.toFixed(2)}</span>
@@ -491,14 +555,145 @@ function CategoryEditor({ cat, onRemove, onRename, onAddItem, onUpdateItem, onRe
 }
 
 // --- SUMMARY VIEW ---
-function SummaryView({ salesLog, dayTotal, cashTotal, cardTotal, onBack, onReset }) {
+function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discountsTotal, onBack, onReset }) {
+  const [breakdown, setBreakdown] = useState("product"); // product | category | orders
+
+  // Map item name -> category from the current menu (fallback for older sales)
+  const nameToCategory = {};
+  (menu || []).forEach(c => c.items.forEach(it => { nameToCategory[it.name] = c.category; }));
+  const categoryOf = (item) => item.category || nameToCategory[item.name] || "Uncategorised";
+
+  // Aggregate sold line items across all orders
+  const productMap = {};
+  const categoryMap = {};
+  salesLog.forEach(r => {
+    r.items.forEach(i => {
+      const revenue = i.price * i.qty;
+      const cat = categoryOf(i);
+      if (!productMap[i.name]) productMap[i.name] = { name: i.name, category: cat, qty: 0, revenue: 0 };
+      productMap[i.name].qty += i.qty;
+      productMap[i.name].revenue += revenue;
+      if (!categoryMap[cat]) categoryMap[cat] = { name: cat, qty: 0, revenue: 0 };
+      categoryMap[cat].qty += i.qty;
+      categoryMap[cat].revenue += revenue;
+    });
+  });
+  const products = Object.values(productMap).sort((a, b) => b.revenue - a.revenue);
+  const categories = Object.values(categoryMap).sort((a, b) => b.revenue - a.revenue);
+  const grossSales = products.reduce((s, p) => s + p.revenue, 0);
+  const rows = breakdown === "category" ? categories : products;
+
+  const downloadCsv = () => {
+    const esc = (v) => `"${String(v).replace(/"/g, '""')}"`;
+    const money = (n) => n.toFixed(2);
+    const dateStr = new Date().toLocaleDateString("en-GB");
+    const lines = [];
+    lines.push(`Event Till - Day Summary,${dateStr}`);
+    lines.push("");
+    lines.push("Totals");
+    lines.push(`Total,${money(dayTotal)}`);
+    lines.push(`Cash,${money(cashTotal)}`);
+    lines.push(`Card,${money(cardTotal)}`);
+    lines.push(`Discounts,${money(discountsTotal)}`);
+    lines.push(`Orders,${salesLog.length}`);
+    lines.push("");
+    lines.push("Sales by product");
+    lines.push("Product,Category,Qty,Revenue");
+    products.forEach(p => lines.push([esc(p.name), esc(p.category), p.qty, money(p.revenue)].join(",")));
+    lines.push(`Gross,,${products.reduce((s, p) => s + p.qty, 0)},${money(grossSales)}`);
+    lines.push("");
+    lines.push("Sales by category");
+    lines.push("Category,Qty,Revenue");
+    categories.forEach(c => lines.push([esc(c.name), c.qty, money(c.revenue)].join(",")));
+    lines.push(`Gross,,${money(grossSales)}`);
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `event-till-summary-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadPdf = () => {
+    const dateStr = new Date().toLocaleDateString("en-GB");
+    const money = (n) => `${CURRENCY}${n.toFixed(2)}`;
+    const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const productRows = products.map(p =>
+      `<tr><td>${esc(p.name)}</td><td class="muted">${esc(p.category)}</td><td class="num">${p.qty}</td><td class="num">${money(p.revenue)}</td></tr>`
+    ).join("");
+    const categoryRows = categories.map(c =>
+      `<tr><td>${esc(c.name)}</td><td class="num">${c.qty}</td><td class="num">${money(c.revenue)}</td></tr>`
+    ).join("");
+    const totalQty = products.reduce((s, p) => s + p.qty, 0);
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Day Summary ${dateStr}</title>
+      <style>
+        body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;padding:24px;max-width:720px;margin:auto}
+        h1{font-size:22px;margin:0 0 2px} .date{color:#64748b;margin-bottom:20px}
+        h2{font-size:15px;margin:22px 0 8px;border-bottom:2px solid #e2e8f0;padding-bottom:4px}
+        table{width:100%;border-collapse:collapse;font-size:13px}
+        th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #f1f5f9}
+        th{color:#64748b;font-size:11px;text-transform:uppercase}
+        .num{text-align:right} .muted{color:#94a3b8;font-size:12px}
+        .totals{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+        .card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px}
+        .card .lbl{font-size:11px;color:#64748b} .card .val{font-size:18px;font-weight:700}
+        tfoot td{font-weight:700;border-top:2px solid #e2e8f0}
+        @media print{body{padding:0}}
+      </style></head><body>
+      <h1>Event Till — Day Summary</h1>
+      <div class="date">${dateStr}</div>
+      <div class="totals">
+        <div class="card"><div class="lbl">Total</div><div class="val">${money(dayTotal)}</div></div>
+        <div class="card"><div class="lbl">Cash</div><div class="val">${money(cashTotal)}</div></div>
+        <div class="card"><div class="lbl">Card</div><div class="val">${money(cardTotal)}</div></div>
+        <div class="card"><div class="lbl">Discounts</div><div class="val">${money(discountsTotal)}</div></div>
+        <div class="card"><div class="lbl">Orders</div><div class="val">${salesLog.length}</div></div>
+      </div>
+      <h2>Sales by product</h2>
+      <table><thead><tr><th>Product</th><th>Category</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead>
+        <tbody>${productRows || '<tr><td colspan="4" class="muted">No sales</td></tr>'}</tbody>
+        <tfoot><tr><td>Gross</td><td></td><td class="num">${totalQty}</td><td class="num">${money(grossSales)}</td></tr></tfoot>
+      </table>
+      <h2>Sales by category</h2>
+      <table><thead><tr><th>Category</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead>
+        <tbody>${categoryRows || '<tr><td colspan="3" class="muted">No sales</td></tr>'}</tbody>
+        <tfoot><tr><td>Gross</td><td class="num">${totalQty}</td><td class="num">${money(grossSales)}</td></tr></tfoot>
+      </table>
+      <script>window.onload=function(){window.print();}<\/script>
+      </body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { alert("Please allow pop-ups to download the PDF."); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
   return (
     <div className="bg-white rounded-xl shadow p-4">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-lg font-bold">Day Summary</h2>
-        <button onClick={onBack} className="text-blue-600 font-semibold">Back to till</button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={downloadCsv}
+            disabled={salesLog.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white rounded-lg text-sm font-semibold disabled:bg-slate-300"
+          >
+            <Download size={16} /> CSV
+          </button>
+          <button
+            onClick={downloadPdf}
+            disabled={salesLog.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white rounded-lg text-sm font-semibold disabled:bg-slate-300"
+          >
+            <Download size={16} /> PDF
+          </button>
+          <button onClick={onBack} className="text-blue-600 font-semibold ml-1">Back to till</button>
+        </div>
       </div>
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <div className="bg-green-50 p-3 rounded-lg">
           <div className="text-xs text-green-700 font-semibold">Total</div>
           <div className="text-xl font-bold text-green-900">{CURRENCY}{dayTotal.toFixed(2)}</div>
@@ -511,7 +706,61 @@ function SummaryView({ salesLog, dayTotal, cashTotal, cardTotal, onBack, onReset
           <div className="text-xs text-purple-700 font-semibold">Card</div>
           <div className="text-xl font-bold text-purple-900">{CURRENCY}{cardTotal.toFixed(2)}</div>
         </div>
+        <div className="bg-amber-50 p-3 rounded-lg">
+          <div className="text-xs text-amber-700 font-semibold">Discounts</div>
+          <div className="text-xl font-bold text-amber-900">{CURRENCY}{discountsTotal.toFixed(2)}</div>
+        </div>
       </div>
+
+      {/* Breakdown toggle */}
+      <div className="flex bg-slate-100 rounded-lg p-0.5 mb-3 w-fit">
+        {[["product", "By product"], ["category", "By category"], ["orders", "Orders"]].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setBreakdown(key)}
+            className={`px-4 py-1.5 rounded-md text-sm font-semibold ${breakdown === key ? "bg-white shadow text-slate-800" : "text-slate-500"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {breakdown !== "orders" ? (
+        <div className="max-h-96 overflow-y-auto border-t border-slate-200">
+          {rows.length === 0 ? (
+            <div className="text-center text-slate-400 py-8">No sales yet</div>
+          ) : (
+            <>
+              <div className="flex justify-between text-xs font-semibold text-slate-400 uppercase py-2 border-b border-slate-100">
+                <span>{breakdown === "category" ? "Category" : "Product"}</span>
+                <span className="flex gap-6"><span className="w-12 text-right">Qty</span><span className="w-20 text-right">Revenue</span></span>
+              </div>
+              {rows.map(row => (
+                <div key={row.name} className="flex justify-between items-center py-2 border-b border-slate-100 text-sm">
+                  <div className="min-w-0 pr-2">
+                    <div className="font-semibold text-slate-800 truncate">{row.name}</div>
+                    {breakdown === "product" && (
+                      <div className="text-xs text-slate-400">{row.category}</div>
+                    )}
+                  </div>
+                  <div className="flex gap-6 shrink-0">
+                    <span className="w-12 text-right font-medium text-slate-600">{row.qty}</span>
+                    <span className="w-20 text-right font-bold text-slate-800">{CURRENCY}{row.revenue.toFixed(2)}</span>
+                  </div>
+                </div>
+              ))}
+              <div className="flex justify-between items-center py-2 text-sm font-bold border-t-2 border-slate-200">
+                <span>Gross sales</span>
+                <span className="flex gap-6">
+                  <span className="w-12 text-right">{rows.reduce((s, r) => s + r.qty, 0)}</span>
+                  <span className="w-20 text-right">{CURRENCY}{grossSales.toFixed(2)}</span>
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+      <>
       <div className="text-sm text-slate-600 mb-2">{salesLog.length} orders</div>
       <div className="max-h-96 overflow-y-auto border-t border-slate-200">
         {salesLog.length === 0 ? (
@@ -526,10 +775,17 @@ function SummaryView({ salesLog, dayTotal, cashTotal, cardTotal, onBack, onReset
               <div className="text-slate-500 text-xs">
                 {r.items.map(i => `${i.qty}× ${i.name}`).join(", ")}
               </div>
+              {r.discount && (
+                <div className="text-amber-600 text-xs font-medium">
+                  Discount{r.discount.mode === "percent" ? ` (${r.discount.value}%)` : ""}: -{CURRENCY}{r.discount.amount.toFixed(2)}
+                </div>
+              )}
             </div>
           ))
         )}
       </div>
+      </>
+      )}
       <button
         onClick={onReset}
         className="mt-4 w-full py-2 text-sm text-red-600 font-semibold border border-red-200 rounded-lg"
