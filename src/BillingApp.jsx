@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Minus, Trash2, Receipt, TrendingUp, Settings, Edit2, Check, X, Delete, Download } from "lucide-react";
+import { Plus, Minus, Trash2, Receipt, TrendingUp, Settings, Edit2, Check, X, Delete, Download, ArrowLeftRight } from "lucide-react";
 
 const CURRENCY = "£";
 const MENU_KEY = "billing_menu_v1";
@@ -45,6 +45,11 @@ export default function BillingApp() {
     return m[0]?.category || "";
   });
   const [view, setView] = useState("till"); // till | summary | editor
+  const [confirmCard, setConfirmCard] = useState(false);
+  const [splitMode, setSplitMode] = useState(false);
+  const [cardPart, setCardPart] = useState("");
+  const [cashRecv, setCashRecv] = useState("");
+  const [splitField, setSplitField] = useState("card"); // which field the split numpad edits
 
   // Persist as things change
   useEffect(() => { save(MENU_KEY, menu); }, [menu]);
@@ -86,6 +91,25 @@ export default function BillingApp() {
     });
   };
 
+  // Generic numeric-keypad handler for a string state setter
+  const pressInto = (setter, key) => {
+    setter(prev => {
+      if (key === "clear") return "";
+      if (key === "back") return prev.slice(0, -1);
+      if (key === ".") {
+        if (prev.includes(".")) return prev;
+        if (prev === "") return "0.";
+        return prev + ".";
+      }
+      if (prev === "0") return key;
+      if (prev.includes(".")) {
+        const decimals = prev.split(".")[1];
+        if (decimals.length >= 2) return prev;
+      }
+      return prev + key;
+    });
+  };
+
   const subtotal = order.reduce((sum, o) => sum + o.price * o.qty, 0);
   const discountValueNum = parseFloat(discount.value) || 0;
   const rawDiscountAmount = discount.mode === "percent" ? (subtotal * discountValueNum) / 100 : discountValueNum;
@@ -94,8 +118,12 @@ export default function BillingApp() {
   const cash = parseFloat(cashGiven) || 0;
   const change = cash - total;
   const canComplete = order.length > 0;
+  const cardPartNum = Math.min(Math.max(parseFloat(cardPart) || 0, 0), total);
+  const cashPartNum = Math.max(total - cardPartNum, 0);
+  const cashRecvNum = parseFloat(cashRecv) || 0;
+  const splitChange = cashRecvNum - cashPartNum; // +ve = change owed, -ve = short
 
-  const completeOrder = (paymentType) => {
+  const completeOrder = (paymentType, split = null) => {
     const record = {
       id: Date.now(),
       time: new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
@@ -104,17 +132,30 @@ export default function BillingApp() {
       discount: discountAmount > 0 ? { mode: discount.mode, value: discountValueNum, amount: discountAmount } : null,
       total,
       payment: paymentType,
+      split, // { cash, card } when paymentType === "split"
       cashGiven: paymentType === "cash" ? cash : null,
       change: paymentType === "cash" ? change : null,
     };
     setSalesLog(prev => [record, ...prev]);
     clearOrder();
+    setSplitMode(false);
+    setCardPart("");
+    setCashRecv("");
+    setSplitField("card");
   };
 
   const dayTotal = salesLog.reduce((sum, r) => sum + r.total, 0);
-  const cashTotal = salesLog.filter(r => r.payment === "cash").reduce((sum, r) => sum + r.total, 0);
-  const cardTotal = salesLog.filter(r => r.payment === "card").reduce((sum, r) => sum + r.total, 0);
+  const cashTotal = salesLog.reduce((sum, r) => sum + (r.payment === "cash" ? r.total : r.payment === "split" ? (r.split?.cash || 0) : 0), 0);
+  const cardTotal = salesLog.reduce((sum, r) => sum + (r.payment === "card" ? r.total : r.payment === "split" ? (r.split?.card || 0) : 0), 0);
   const discountsTotal = salesLog.reduce((sum, r) => sum + (r.discount?.amount || 0), 0);
+
+  const switchPayment = (id) => {
+    setSalesLog(prev => prev.map(r => {
+      if (r.id !== id) return r;
+      const next = r.payment === "cash" ? "card" : "cash";
+      return { ...r, payment: next, cashGiven: null, change: null };
+    }));
+  };
 
   const resetDay = () => {
     if (confirm("Clear ALL sales for the day? Cannot be undone.")) {
@@ -170,6 +211,7 @@ export default function BillingApp() {
             cashTotal={cashTotal}
             cardTotal={cardTotal}
             discountsTotal={discountsTotal}
+            onSwitchPayment={switchPayment}
             onBack={() => setView("till")}
             onReset={resetDay}
           />
@@ -366,11 +408,138 @@ export default function BillingApp() {
                   Paid Cash
                 </button>
                 <button
-                  onClick={() => completeOrder("card")}
+                  onClick={() => setConfirmCard(true)}
                   disabled={!canComplete}
                   className="py-4 bg-blue-600 text-white font-bold text-lg rounded-xl disabled:bg-slate-300 active:bg-blue-700"
                 >
                   Paid Card
+                </button>
+              </div>
+              <button
+                onClick={() => { setCardPart(""); setCashRecv(""); setSplitField("card"); setSplitMode(true); }}
+                disabled={!canComplete}
+                className="mt-2 w-full py-3 bg-slate-700 text-white font-bold rounded-xl disabled:bg-slate-300 active:bg-slate-800"
+              >
+                Split cash + card
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Card approval confirmation */}
+        {confirmCard && (
+          <div
+            className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+            onClick={() => setConfirmCard(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-6 max-w-sm w-full text-center"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="text-sm font-semibold text-slate-500 mb-1">Card payment</div>
+              <div className="text-3xl font-bold text-slate-900 mb-4">{CURRENCY}{total.toFixed(2)}</div>
+              <p className="text-slate-600 text-sm mb-5">Did the card payment go through?</p>
+              <div className="grid gap-2">
+                <button
+                  onClick={() => { completeOrder("card"); setConfirmCard(false); }}
+                  className="py-3 bg-green-600 text-white font-bold rounded-xl active:bg-green-700"
+                >
+                  Yes — card approved
+                </button>
+                <button
+                  onClick={() => setConfirmCard(false)}
+                  className="py-3 bg-slate-100 text-slate-700 font-semibold rounded-xl"
+                >
+                  Declined — take cash instead
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Split payment */}
+        {splitMode && (
+          <div
+            className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+            onClick={() => setSplitMode(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-5 max-w-sm w-full"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="text-center mb-3">
+                <div className="text-sm font-semibold text-slate-500">Split payment — Total</div>
+                <div className="text-3xl font-bold text-slate-900">{CURRENCY}{total.toFixed(2)}</div>
+              </div>
+
+              {/* Tap a field, then use the pad below */}
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <button
+                  onClick={() => setSplitField("card")}
+                  className={`text-left p-3 rounded-lg border-2 ${splitField === "card" ? "border-purple-500 bg-purple-50" : "border-slate-200 bg-white"}`}
+                >
+                  <div className="text-xs font-semibold text-purple-700">On card</div>
+                  <div className="text-xl font-bold text-slate-900">{CURRENCY}{cardPartNum.toFixed(2)}</div>
+                </button>
+                <div className="p-3 rounded-lg border-2 border-slate-200 bg-slate-50">
+                  <div className="text-xs font-semibold text-blue-700">Cash due</div>
+                  <div className="text-xl font-bold text-slate-900">{CURRENCY}{cashPartNum.toFixed(2)}</div>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSplitField("cash")}
+                className={`w-full text-left p-3 rounded-lg border-2 mb-2 ${splitField === "cash" ? "border-green-500 bg-green-50" : "border-slate-200 bg-white"}`}
+              >
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-600">Cash received (optional)</div>
+                    <div className="text-xl font-bold text-slate-900">{CURRENCY}{cashRecvNum.toFixed(2)}</div>
+                  </div>
+                  {cashRecvNum > 0 && (
+                    <div className="text-right">
+                      <div className={`text-xs font-semibold ${splitChange >= 0 ? "text-green-700" : "text-red-600"}`}>
+                        {splitChange >= 0 ? "Change" : "Short"}
+                      </div>
+                      <div className={`text-xl font-bold ${splitChange >= 0 ? "text-green-700" : "text-red-600"}`}>
+                        {CURRENCY}{Math.abs(splitChange).toFixed(2)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </button>
+
+              {/* Shared number pad */}
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {["7","8","9","4","5","6","1","2","3",".","0","back"].map(k => (
+                  <button
+                    key={k}
+                    onClick={() => pressInto(splitField === "card" ? setCardPart : setCashRecv, k)}
+                    className="h-12 bg-slate-100 active:bg-slate-300 rounded-xl text-2xl font-bold text-slate-800 flex items-center justify-center select-none"
+                  >
+                    {k === "back" ? <Delete size={22} /> : k}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid gap-2">
+                <button
+                  onClick={() => completeOrder("split", {
+                    cash: cashPartNum,
+                    card: cardPartNum,
+                    cashGiven: cashRecvNum > 0 ? cashRecvNum : null,
+                    change: cashRecvNum > 0 ? splitChange : null,
+                  })}
+                  disabled={cardPartNum <= 0 || cardPartNum >= total || (cashRecvNum > 0 && splitChange < 0)}
+                  className="py-3 bg-green-600 text-white font-bold rounded-xl disabled:bg-slate-300 active:bg-green-700"
+                >
+                  Card approved — record split
+                </button>
+                <button
+                  onClick={() => setSplitMode(false)}
+                  className="py-3 bg-slate-100 text-slate-700 font-semibold rounded-xl"
+                >
+                  Cancel
                 </button>
               </div>
             </div>
@@ -555,7 +724,7 @@ function CategoryEditor({ cat, onRemove, onRename, onAddItem, onUpdateItem, onRe
 }
 
 // --- SUMMARY VIEW ---
-function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discountsTotal, onBack, onReset }) {
+function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discountsTotal, onSwitchPayment, onBack, onReset }) {
   const [breakdown, setBreakdown] = useState("product"); // product | category | orders
 
   // Map item name -> category from the current menu (fallback for older sales)
@@ -768,10 +937,32 @@ function SummaryView({ salesLog, menu, dayTotal, cashTotal, cardTotal, discounts
         ) : (
           salesLog.map(r => (
             <div key={r.id} className="py-2 border-b border-slate-100 text-sm">
-              <div className="flex justify-between font-semibold">
-                <span>{r.time} · {r.payment}</span>
+              <div className="flex justify-between items-center font-semibold">
+                <span className="flex items-center gap-2">
+                  <span>{r.time}</span>
+                  {r.payment === "split" ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
+                      split
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => onSwitchPayment(r.id)}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold ${r.payment === "cash" ? "bg-blue-100 text-blue-700" : "bg-purple-100 text-purple-700"}`}
+                      title="Tap to switch cash/card"
+                    >
+                      {r.payment}
+                      <ArrowLeftRight size={11} />
+                    </button>
+                  )}
+                </span>
                 <span>{CURRENCY}{r.total.toFixed(2)}</span>
               </div>
+              {r.payment === "split" && r.split && (
+                <div className="text-xs text-slate-500">
+                  {CURRENCY}{(r.split.card || 0).toFixed(2)} card + {CURRENCY}{(r.split.cash || 0).toFixed(2)} cash
+                  {r.split.change > 0 && ` · change ${CURRENCY}${r.split.change.toFixed(2)}`}
+                </div>
+              )}
               <div className="text-slate-500 text-xs">
                 {r.items.map(i => `${i.qty}× ${i.name}`).join(", ")}
               </div>
